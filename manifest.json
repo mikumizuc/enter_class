@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "CLASS Enter",
+  "version": "1.0.0",
+  "description": "東京理科大学 CLASS の入口画面を Enter キーで進めます。",
+  "content_scripts": [
+    {
+      "matches": ["https://class.admin.tus.ac.jp/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
