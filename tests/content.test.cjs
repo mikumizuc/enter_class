@@ -10,6 +10,7 @@ class Element {
     Object.assign(this, {
       textContent: '', value: '', attrs: {}, images: [], clicks: 0,
       disabled: false, hidden: false, control: false, isContentEditable: false,
+      type: 'text', input: false, form: null, readOnly: false,
       style: { display: 'block', visibility: 'visible' }, rects: [{}],
     }, options);
   }
@@ -17,17 +18,20 @@ class Element {
   querySelectorAll() { return this.images; }
   matches() { return this.disabled || this.attrs['aria-disabled'] === 'true'; }
   closest(selector) {
+    if (selector === 'input') return this.input ? this : null;
+    if (selector === 'form') return this.form;
     return (selector.startsWith('[hidden]') ? this.hidden : this.control) ? this : null;
   }
   getClientRects() { return this.rects; }
   click() { this.clicks++; }
 }
 
-function setup(buttons) {
+function setup(buttons, pageText = '') {
   let handle;
   vm.runInNewContext(source, {
     Element, getComputedStyle: (element) => element.style,
     document: {
+      body: { textContent: pageText },
       querySelectorAll: () => buttons,
       addEventListener: (name, callback) => {
         assert.equal(name, 'keydown');
@@ -120,4 +124,56 @@ test('manifest limits injection to the CLASS HTTPS site without extra permission
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://class.admin.tus.ac.jp/*']);
   assert.deepEqual(manifest.content_scripts[0].js, ['content.js']);
   assert.equal(manifest.permissions, undefined);
+});
+
+test('Enter in a code field clicks attendance, never refresh', () => {
+  const form = { textContent: '認証コード' };
+  const register = new Element({ textContent: '✔ 出席登録する', form });
+  const refresh = new Element({ textContent: '再表示する', form });
+  const press = setup([refresh, register]);
+  for (const type of ['text', 'tel', 'number']) {
+    const input = new Element({ input: true, control: true, form, type });
+    assert.equal(press({ composedPath: () => [input] }).prevented, true);
+  }
+  assert.equal(register.clicks, 3);
+  assert.equal(refresh.clicks, 0);
+});
+
+test('supports attendance code fields without a form and page-level Enter', () => {
+  const register = new Element({ value: '出席登録する' });
+  const input = new Element({ input: true, control: true });
+  const press = setup([register], '出席登録 認証コード');
+  assert.equal(press({ composedPath: () => [input] }).prevented, true);
+  assert.equal(press().prevented, true);
+  assert.equal(register.clicks, 2);
+});
+
+test('does not submit unrelated, read-only, or non-code input fields', () => {
+  const form = { textContent: '認証コード' };
+  const register = new Element({ textContent: '出席登録する', form });
+  const press = setup([register]);
+  for (const options of [
+    { form: { textContent: '検索' } }, { form: { textContent: '認証コード' } },
+    { form, type: 'password' }, { form, readOnly: true }, { form, disabled: true },
+  ]) {
+    const input = new Element({ input: true, control: true, ...options });
+    assert.equal(press({ composedPath: () => [input] }).prevented, false);
+  }
+  assert.equal(register.clicks, 0);
+});
+
+test('attendance preserves IME and repeat guards and ignores unavailable or ambiguous buttons', () => {
+  const input = new Element({ input: true, control: true });
+  for (const options of [{ disabled: true }, { hidden: true }, { attrs: { 'aria-disabled': 'true' } }]) {
+    const register = new Element({ textContent: '出席登録する', ...options });
+    assert.equal(setup([register], '認証コード')({ composedPath: () => [input] }).prevented, false);
+    assert.equal(register.clicks, 0);
+  }
+  const register = new Element({ textContent: '出席登録する' });
+  const press = setup([register], '認証コード');
+  for (const options of [{ repeat: true }, { isComposing: true }, { ctrlKey: true }, { defaultPrevented: true }]) {
+    assert.equal(press({ composedPath: () => [input], ...options }).prevented, false);
+  }
+  assert.equal(register.clicks, 0);
+  assert.equal(setup([register, register], '認証コード')({ composedPath: () => [input] }).prevented, false);
 });
