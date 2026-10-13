@@ -26,20 +26,38 @@ class Element {
   click() { this.clicks++; }
 }
 
-function setup(buttons, pageText = '') {
+function setup(buttons, pageText = '', autoStart = false) {
   let handle;
+  let initialized = autoStart;
+  let mutation;
+  let load;
+  let expiry;
+  let disconnected = false;
   vm.runInNewContext(source, {
     Element, getComputedStyle: (element) => element.style,
+    MutationObserver: class {
+      constructor(callback) { mutation = callback; }
+      observe() {}
+      disconnect() { disconnected = true; }
+    },
+    setTimeout: (callback) => { expiry = callback; return 1; },
+    clearTimeout: () => { expiry = null; },
+    window: {
+      addEventListener: (name, callback) => { assert.equal(name, 'load'); load = callback; },
+      removeEventListener: () => { load = null; },
+    },
     document: {
+      documentElement: {},
       body: { textContent: pageText },
-      querySelectorAll: () => buttons,
+      querySelectorAll: () => initialized ? buttons : [],
       addEventListener: (name, callback) => {
         assert.equal(name, 'keydown');
         handle = callback;
       },
     },
   });
-  return (options = {}) => {
+  initialized = true;
+  const press = (options = {}) => {
     const event = {
       key: 'Enter', composedPath: () => [new Element()],
       prevented: false, preventDefault() { this.prevented = true; }, ...options,
@@ -47,6 +65,11 @@ function setup(buttons, pageText = '') {
     handle(event);
     return event;
   };
+  press.mutate = () => { if (!disconnected) mutation(); };
+  press.load = () => { load?.(); };
+  press.expire = () => { expiry?.(); };
+  press.isDisconnected = () => disconnected;
+  return press;
 }
 
 test('Enter clicks the unique entry button and prevents native submission', () => {
@@ -176,4 +199,64 @@ test('attendance preserves IME and repeat guards and ignores unavailable or ambi
   }
   assert.equal(register.clicks, 0);
   assert.equal(setup([register, register], '認証コード')({ composedPath: () => [input] }).prevented, false);
+});
+
+test('automatically clicks entrance once and stops watching', () => {
+  const entry = new Element({ textContent: 'ENTER' });
+  const press = setup([entry], '', true);
+  assert.equal(entry.clicks, 1);
+  assert.equal(press.isDisconnected(), true);
+  press.mutate();
+  press.load();
+  assert.equal(entry.clicks, 1);
+});
+
+test('automatically proceeds when the entrance is added or enabled later', () => {
+  const entries = [];
+  const press = setup(entries, '', true);
+  const entry = new Element({ textContent: 'ENTER', disabled: true });
+  entries.push(entry);
+  press.mutate();
+  assert.equal(entry.clicks, 0);
+  entry.disabled = false;
+  press.mutate();
+  assert.equal(entry.clicks, 1);
+});
+
+test('automatic navigation ignores hidden and ambiguous entrances', () => {
+  for (const entries of [
+    [new Element({ textContent: 'ENTER', hidden: true })],
+    [new Element({ textContent: 'ENTER' }), new Element({ textContent: 'ENTER' })],
+  ]) {
+    const press = setup(entries, '', true);
+    press.mutate();
+    press.load();
+    assert.ok(entries.every((entry) => entry.clicks === 0));
+  }
+});
+
+test('attendance and refresh are never clicked automatically', () => {
+  const register = new Element({ textContent: '出席登録する' });
+  const refresh = new Element({ textContent: '再表示する' });
+  const press = setup([register, refresh], '認証コード', true);
+  press.mutate();
+  press.load();
+  assert.equal(register.clicks, 0);
+  assert.equal(refresh.clicks, 0);
+  assert.equal(press().prevented, true);
+  assert.equal(register.clicks, 1);
+});
+
+test('automatic waiting expires while manual Enter remains available', () => {
+  const entries = [];
+  const press = setup(entries, '', true);
+  press.expire();
+  assert.equal(press.isDisconnected(), true);
+  const entry = new Element({ textContent: 'ENTER' });
+  entries.push(entry);
+  press.mutate();
+  press.load();
+  assert.equal(entry.clicks, 0);
+  assert.equal(press().prevented, true);
+  assert.equal(entry.clicks, 1);
 });

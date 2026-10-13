@@ -22,6 +22,32 @@
       element.getClientRects().length > 0;
   }
 
+  // 入口だけをページごとに一度、自動で進める。遅れて表示されるボタンも待つ。
+  let entryClicked = false;
+  let observer;
+  let timeout;
+  function stopWaiting() {
+    observer?.disconnect();
+    clearTimeout(timeout);
+    window.removeEventListener("load", enterAutomatically);
+  }
+  function enterAutomatically() {
+    if (entryClicked) return;
+    const buttons = Array.from(document.querySelectorAll(selector))
+      .filter((element) => hasLabel(element, "ENTER") && isAvailable(element));
+    if (buttons.length !== 1) return;
+    entryClicked = true;
+    stopWaiting();
+    buttons[0].click();
+  }
+  observer = new MutationObserver(enterAutomatically);
+  observer.observe(document.documentElement, {
+    childList: true, subtree: true, attributes: true, characterData: true,
+  });
+  window.addEventListener("load", enterAutomatically);
+  timeout = setTimeout(stopWaiting, 15000);
+  enterAutomatically();
+
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || event.defaultPrevented || event.repeat ||
         event.isComposing || event.keyCode === 229 || event.ctrlKey ||
