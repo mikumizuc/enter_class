@@ -40,13 +40,17 @@
     stopWaiting();
     buttons[0].click();
   }
-  observer = new MutationObserver(enterAutomatically);
-  observer.observe(document.documentElement, {
-    childList: true, subtree: true, attributes: true, characterData: true,
+  chrome.storage.local.get({ autoEnter: true }, (settings) => {
+    // 設定の読み込みに失敗した場合は手動操作を残す。
+    if (chrome.runtime.lastError || !settings.autoEnter) return;
+    observer = new MutationObserver(enterAutomatically);
+    observer.observe(document.documentElement, {
+      childList: true, subtree: true, attributes: true, characterData: true,
+    });
+    window.addEventListener("load", enterAutomatically);
+    timeout = setTimeout(stopWaiting, 15000);
+    enterAutomatically();
   });
-  window.addEventListener("load", enterAutomatically);
-  timeout = setTimeout(stopWaiting, 15000);
-  enterAutomatically();
 
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || event.defaultPrevented || event.repeat ||

@@ -26,7 +26,7 @@ class Element {
   click() { this.clicks++; }
 }
 
-function setup(buttons, pageText = '', autoStart = false) {
+function setup(buttons, pageText = '', autoStart = false, autoEnter = true, storageError = false) {
   let handle;
   let initialized = autoStart;
   let mutation;
@@ -34,6 +34,10 @@ function setup(buttons, pageText = '', autoStart = false) {
   let expiry;
   let disconnected = false;
   vm.runInNewContext(source, {
+    chrome: {
+      runtime: { lastError: storageError ? { message: 'Unavailable' } : undefined },
+      storage: { local: { get: (defaults, callback) => callback({ ...defaults, autoEnter }) } },
+    },
     Element, getComputedStyle: (element) => element.style,
     MutationObserver: class {
       constructor(callback) { mutation = callback; }
@@ -65,7 +69,7 @@ function setup(buttons, pageText = '', autoStart = false) {
     handle(event);
     return event;
   };
-  press.mutate = () => { if (!disconnected) mutation(); };
+  press.mutate = () => { if (!disconnected) mutation?.(); };
   press.load = () => { load?.(); };
   press.expire = () => { expiry?.(); };
   press.isDisconnected = () => disconnected;
@@ -141,12 +145,13 @@ test('finds a button added after initialization', () => {
   assert.equal(entry.clicks, 1);
 });
 
-test('manifest limits injection to the CLASS HTTPS site without extra permissions', () => {
+test('manifest limits injection to CLASS and uses only settings storage permission', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../manifest.json'), 'utf8'));
   assert.equal(manifest.manifest_version, 3);
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://class.admin.tus.ac.jp/*']);
   assert.deepEqual(manifest.content_scripts[0].js, ['content.js']);
-  assert.equal(manifest.permissions, undefined);
+  assert.deepEqual(manifest.permissions, ['storage']);
+  assert.equal(manifest.action.default_popup, 'popup.html');
 });
 
 test('Enter in a code field clicks attendance, never refresh', () => {
@@ -256,6 +261,26 @@ test('automatic waiting expires while manual Enter remains available', () => {
   entries.push(entry);
   press.mutate();
   press.load();
+  assert.equal(entry.clicks, 0);
+  assert.equal(press().prevented, true);
+  assert.equal(entry.clicks, 1);
+});
+
+test('manual mode prevents auto navigation while preserving Enter and attendance', () => {
+  for (const label of ['ENTER', '出席登録する']) {
+    const button = new Element({ textContent: label });
+    const press = setup([button], '', true, false);
+    press.mutate();
+    press.load();
+    assert.equal(button.clicks, 0);
+    assert.equal(press().prevented, true);
+    assert.equal(button.clicks, 1);
+  }
+});
+
+test('storage read errors leave manual navigation available', () => {
+  const entry = new Element({ textContent: 'ENTER' });
+  const press = setup([entry], '', true, true, true);
   assert.equal(entry.clicks, 0);
   assert.equal(press().prevented, true);
   assert.equal(entry.clicks, 1);

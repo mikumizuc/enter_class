@@ -1,0 +1,13 @@
+body {
+  width: 290px;
+  margin: 0;
+  padding: 18px;
+  font-family: system-ui, sans-serif;
+  color: #252525;
+  background: #fff;
+}
+h1 { margin: 0 0 18px; font-size: 19px; color: #801c34; }
+label { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+input { accent-color: #801c34; width: 18px; height: 18px; }
+p { font-size: 13px; line-height: 1.6; }
+#status { margin-bottom: 0; }
