@@ -11,6 +11,7 @@ class Element {
       textContent: '', value: '', attrs: {}, images: [], clicks: 0,
       disabled: false, hidden: false, control: false, isContentEditable: false,
       type: 'text', input: false, form: null, readOnly: false,
+      events: [], selectionStart: null, selectionEnd: null, selectionDirection: 'none',
       style: { display: 'block', visibility: 'visible' }, rects: [{}],
     }, options);
   }
@@ -20,10 +21,15 @@ class Element {
   closest(selector) {
     if (selector === 'input') return this.input ? this : null;
     if (selector === 'form') return this.form;
+    if (selector.startsWith('a, button')) return this.input ? null : this;
     return (selector.startsWith('[hidden]') ? this.hidden : this.control) ? this : null;
   }
   getClientRects() { return this.rects; }
   click() { this.clicks++; }
+  dispatchEvent(event) { this.events.push(event.type); }
+  setSelectionRange(start, end, direction) {
+    Object.assign(this, { selectionStart: start, selectionEnd: end, selectionDirection: direction });
+  }
 }
 
 function setup(buttons, pageText = '', autoStart = false, autoEnter = true, storageError = false) {
@@ -33,12 +39,13 @@ function setup(buttons, pageText = '', autoStart = false, autoEnter = true, stor
   let load;
   let expiry;
   let disconnected = false;
+  const handlers = {};
   vm.runInNewContext(source, {
     chrome: {
       runtime: { lastError: storageError ? { message: 'Unavailable' } : undefined },
       storage: { local: { get: (defaults, callback) => callback({ ...defaults, autoEnter }) } },
     },
-    Element, getComputedStyle: (element) => element.style,
+    Element, Event, getComputedStyle: (element) => element.style,
     MutationObserver: class {
       constructor(callback) { mutation = callback; }
       observe() {}
@@ -53,10 +60,11 @@ function setup(buttons, pageText = '', autoStart = false, autoEnter = true, stor
     document: {
       documentElement: {},
       body: { textContent: pageText },
-      querySelectorAll: () => initialized ? buttons : [],
+      querySelectorAll: (selector) => initialized ? buttons.filter((element) =>
+        selector === 'input' ? element.input : !element.input) : [],
       addEventListener: (name, callback) => {
-        assert.equal(name, 'keydown');
-        handle = callback;
+        handlers[name] = callback;
+        if (name === 'keydown') handle = callback;
       },
     },
   });
@@ -73,6 +81,7 @@ function setup(buttons, pageText = '', autoStart = false, autoEnter = true, stor
   press.load = () => { load?.(); };
   press.expire = () => { expiry?.(); };
   press.isDisconnected = () => disconnected;
+  press.emit = (name, target, options = {}) => handlers[name]({ composedPath: () => [target], ...options });
   return press;
 }
 
@@ -284,4 +293,84 @@ test('storage read errors leave manual navigation available', () => {
   assert.equal(entry.clicks, 0);
   assert.equal(press().prevented, true);
   assert.equal(entry.clicks, 1);
+});
+
+test('converts every full-width digit on input, preserving zeros, other characters, and selection', () => {
+  const input = new Element({ input: true, value: '０１２３４５６７８９Aあ',
+    selectionStart: 3, selectionEnd: 5, selectionDirection: 'backward' });
+  const register = new Element({ textContent: '出席登録する' });
+  const press = setup([input, register], '認証コード');
+  press.emit('input', input);
+  assert.equal(input.value, '0123456789Aあ');
+  assert.equal(input.selectionStart, 3);
+  assert.equal(input.selectionEnd, 5);
+  assert.equal(input.selectionDirection, 'backward');
+  assert.equal(register.clicks, 0);
+  assert.equal(input.events.length, 0);
+});
+
+test('waits until IME composition ends and notifies the site only once', () => {
+  const input = new Element({ input: true, value: '６' });
+  const register = new Element({ textContent: '出席登録する' });
+  const press = setup([input, register], '認証コード');
+  press.emit('compositionstart', input);
+  press.emit('input', input, { isComposing: true });
+  assert.equal(input.value, '６');
+  press.emit('input', input, { isComposing: false });
+  assert.equal(input.value, '６');
+  press.emit('compositionend', input);
+  assert.equal(input.value, '6');
+  assert.deepEqual(input.events, ['input']);
+  press.emit('input', input);
+  assert.deepEqual(input.events, ['input']);
+  assert.equal(register.clicks, 0);
+});
+
+test('normalizes pasted mixed-width digits and leaves other fields untouched', () => {
+  const form = { textContent: '認証コード' };
+  const register = new Element({ textContent: '出席登録する', form });
+  const code = new Element({ input: true, form, value: '６3３6' });
+  const press = setup([code, register]);
+  press.emit('input', code);
+  assert.equal(code.value, '6336');
+  for (const options of [
+    { form: { textContent: '検索' } }, { form: { textContent: '認証コード' } },
+    { form, type: 'password' }, { form, readOnly: true }, { form, disabled: true },
+  ]) {
+    const other = new Element({ input: true, value: '１２', ...options });
+    press.emit('input', other);
+    assert.equal(other.value, '１２');
+  }
+});
+
+test('registration by Enter normalizes all four fields before clicking', () => {
+  const form = { textContent: '認証コード' };
+  const fields = Array.from('６３３６', (value) => new Element({ input: true, control: true, value, form }));
+  const register = new Element({ textContent: '出席登録する', form });
+  register.click = () => {
+    assert.equal(fields.map((input) => input.value).join(''), '6336');
+    register.clicks++;
+  };
+  const press = setup([...fields, register]);
+  assert.equal(press({ composedPath: () => [fields[3]] }).prevented, true);
+  assert.equal(register.clicks, 1);
+  assert.ok(fields.every((input) => input.events.length === 1));
+});
+
+test('manual registration click normalizes fields without triggering another click', () => {
+  const input = new Element({ input: true, value: '０９' });
+  const register = new Element({ textContent: '出席登録する' });
+  const press = setup([input, register], '認証コード');
+  press.emit('click', register);
+  assert.equal(input.value, '09');
+  assert.deepEqual(input.events, ['input']);
+  assert.equal(register.clicks, 0);
+});
+
+test('numbers outside the attendance code screen are never changed', () => {
+  const input = new Element({ input: true, value: '１２３４' });
+  const press = setup([input, new Element({ textContent: 'ENTER' })], '認証コード');
+  press.emit('input', input);
+  press.emit('compositionend', input);
+  assert.equal(input.value, '１２３４');
 });

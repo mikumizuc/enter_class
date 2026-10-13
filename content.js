@@ -22,6 +22,60 @@
       element.getClientRects().length > 0;
   }
 
+  function isCodeInput(input) {
+    if (!(input instanceof Element) || !input.closest("input") ||
+        !["text", "tel", "number"].includes(input.type) || input.disabled || input.readOnly) return false;
+    const scope = input.form || document;
+    if (!/認証コード/u.test(scope.textContent || scope.body?.textContent || "")) return false;
+    return Array.from(document.querySelectorAll(selector)).some((button) =>
+      hasLabel(button, "出席登録する") &&
+      (!input.form || (button.form || button.closest("form")) === input.form));
+  }
+
+  const composing = new WeakSet();
+  function normalizeCode(input, notify = false) {
+    if (!isCodeInput(input) || composing.has(input)) return;
+    const converted = input.value.replace(/[０-９]/gu,
+      (digit) => String.fromCharCode(digit.charCodeAt(0) - 0xfee0));
+    if (converted === input.value) return;
+    const { selectionStart, selectionEnd, selectionDirection } = input;
+    input.value = converted;
+    if (selectionStart !== null && selectionStart !== undefined) {
+      input.setSelectionRange(selectionStart, selectionEnd, selectionDirection);
+    }
+    if (notify) input.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  // サイトの入力ハンドラーより前に補正し、IME の未確定文字は変更しない。
+  document.addEventListener("compositionstart", (event) => {
+    const input = event.composedPath()[0];
+    if (input instanceof Element) composing.add(input);
+  }, true);
+  document.addEventListener("compositionend", (event) => {
+    const input = event.composedPath()[0];
+    if (!(input instanceof Element)) return;
+    composing.delete(input);
+    normalizeCode(input, true);
+  }, true);
+  document.addEventListener("input", (event) => {
+    if (!event.isComposing) normalizeCode(event.composedPath()[0]);
+  }, true);
+
+  function normalizeBeforeRegister(button) {
+    for (const input of document.querySelectorAll("input")) {
+      if (!input.form || (button.form || button.closest("form")) === input.form) {
+        normalizeCode(input, true);
+      }
+    }
+  }
+  document.addEventListener("click", (event) => {
+    const target = event.composedPath()[0];
+    const button = target instanceof Element && target.closest(selector);
+    if (button && hasLabel(button, "出席登録する") && isAvailable(button)) {
+      normalizeBeforeRegister(button);
+    }
+  }, true);
+
   // 入口だけをページごとに一度、自動で進める。遅れて表示されるボタンも待つ。
   let entryClicked = false;
   let observer;
@@ -63,12 +117,10 @@
     // 認証コード画面ではテキスト入力中にも登録ボタンを選ぶ。
     // フォームがある場合は入力と登録ボタンが同じフォームに属することを確認する。
     const input = target instanceof Element && target.closest('input');
-    const scope = input?.form || document;
-    const isCodeInput = input && ["text", "tel", "number"].includes(input.type) &&
-      !input.disabled && !input.readOnly && /認証コード/u.test(scope.textContent || scope.body?.textContent || "");
-    if (isCodeInput && attendance.length === 1 &&
+    if (isCodeInput(input) && attendance.length === 1 &&
         (!input.form || (attendance[0].form || attendance[0].closest('form')) === input.form)) {
       event.preventDefault();
+      normalizeBeforeRegister(attendance[0]);
       attendance[0].click();
       return;
     }
@@ -83,6 +135,7 @@
     if (buttons.length !== 1) return;
 
     event.preventDefault();
+    if (hasLabel(buttons[0], "出席登録する")) normalizeBeforeRegister(buttons[0]);
     buttons[0].click();
   });
 })();
