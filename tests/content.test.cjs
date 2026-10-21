@@ -26,6 +26,7 @@ class Element {
   }
   getClientRects() { return this.rects; }
   click() { this.clicks++; }
+  focus() { this.focused = true; }
   dispatchEvent(event) { this.events.push(event.type); }
   setSelectionRange(start, end, direction) {
     Object.assign(this, { selectionStart: start, selectionEnd: end, selectionDirection: direction });
@@ -373,4 +374,77 @@ test('numbers outside the attendance code screen are never changed', () => {
   press.emit('input', input);
   press.emit('compositionend', input);
   assert.equal(input.value, '１２３４');
+});
+
+function codeBoxes(values = ['6', '3', '3', '']) {
+  const form = { textContent: '認証コード' };
+  const fields = values.map((value) => new Element({ input: true, control: true, value, form }));
+  const register = new Element({ textContent: '出席登録する', form });
+  const press = setup([...fields, register]);
+  const backspace = (index, options = {}) => press({
+    key: 'Backspace', composedPath: () => [fields[index]], ...options,
+  });
+  return { fields, register, press, backspace };
+}
+
+test('Backspace in an empty code box clears and focuses the previous digit', () => {
+  const { fields, register, backspace } = codeBoxes();
+  assert.equal(backspace(3).prevented, true);
+  assert.equal(fields.map((field) => field.value).join(''), '63');
+  assert.equal(fields[2].focused, true);
+  assert.deepEqual(fields[2].events, ['input']);
+  assert.equal(backspace(2).prevented, true);
+  assert.equal(fields[1].value, '');
+  assert.equal(fields[1].focused, true);
+  assert.equal(backspace(1, { repeat: true }).prevented, true);
+  assert.equal(fields[0].value, '');
+  assert.equal(fields[0].focused, true);
+  assert.equal(backspace(0).prevented, false);
+  assert.equal(register.clicks, 0);
+});
+
+test('Backspace leaves nonempty code boxes and the first empty box to the browser', () => {
+  const { fields, backspace } = codeBoxes(['', '2', '3', '4']);
+  assert.equal(backspace(0).prevented, false);
+  assert.equal(backspace(3).prevented, false);
+  assert.equal(fields[3].value, '4');
+  assert.equal(fields[2].focused, undefined);
+});
+
+test('Backspace respects IME, modifiers, and handled events', () => {
+  const { fields, press, backspace } = codeBoxes();
+  for (const options of [
+    { isComposing: true }, { keyCode: 229 }, { ctrlKey: true },
+    { altKey: true }, { metaKey: true }, { shiftKey: true }, { defaultPrevented: true },
+  ]) assert.equal(backspace(3, options).prevented, false);
+  press.emit('compositionstart', fields[3]);
+  assert.equal(backspace(3).prevented, false);
+  assert.equal(fields[2].value, '3');
+  assert.equal(fields[2].focused, undefined);
+});
+
+test('Backspace does not cross forms or unavailable fields or ambiguous code groups', () => {
+  for (const change of [
+    (fields) => { fields[2].form = { textContent: '認証コード' }; },
+    (fields) => { fields[2].disabled = true; },
+    (fields) => { fields[2].readOnly = true; },
+    (fields) => { fields[2].hidden = true; },
+    (fields) => { fields[2].value = '12'; },
+  ]) {
+    const { fields, backspace } = codeBoxes();
+    change(fields);
+    assert.equal(backspace(3).prevented, false);
+    assert.equal(fields[2].focused, undefined);
+  }
+  for (const values of [['1', '2', ''], ['1', '2', '3', '4', '']]) {
+    const { backspace } = codeBoxes(values);
+    assert.equal(backspace(values.length - 1).prevented, false);
+  }
+});
+
+test('Backspace in unrelated inputs never moves focus', () => {
+  const fields = Array.from({ length: 4 }, () => new Element({ input: true, value: '' }));
+  const press = setup(fields, '検索');
+  assert.equal(press({ key: 'Backspace', composedPath: () => [fields[3]] }).prevented, false);
+  assert.ok(fields.every((field) => !field.focused));
 });

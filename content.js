@@ -68,6 +68,24 @@
       }
     }
   }
+
+  function backspaceCode(event, input) {
+    if (!isCodeInput(input) || !isAvailable(input) || input.value !== "") return;
+    const fields = Array.from(document.querySelectorAll("input"))
+      .filter((field) => field.form === input.form && isCodeInput(field) && isAvailable(field));
+    // 4桁のコード欄だけを扱い、別の入力フォームへの移動を避ける。
+    if (fields.length !== 4 || fields.some((field) => !/^[0-9０-９]?$/u.test(field.value))) return;
+    const index = fields.indexOf(input);
+    if (index <= 0) return;
+    const previous = fields[index - 1];
+    if (composing.has(previous)) return;
+    event.preventDefault();
+    if (previous.value !== "") {
+      previous.value = "";
+      previous.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    previous.focus();
+  }
   document.addEventListener("click", (event) => {
     const target = event.composedPath()[0];
     const button = target instanceof Element && target.closest(selector);
@@ -107,16 +125,22 @@
   });
 
   document.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter" || event.defaultPrevented || event.repeat ||
+    if (!["Enter", "Backspace"].includes(event.key) || event.defaultPrevented ||
+        (event.key === "Enter" && event.repeat) ||
         event.isComposing || event.keyCode === 229 || event.ctrlKey ||
         event.altKey || event.metaKey || event.shiftKey) return;
 
     const target = event.composedPath()[0];
+    const input = target instanceof Element && target.closest('input');
+    if (input && composing.has(input)) return;
+    if (event.key === "Backspace") {
+      backspaceCode(event, input);
+      return;
+    }
     const available = Array.from(document.querySelectorAll(selector)).filter(isAvailable);
     const attendance = available.filter((element) => hasLabel(element, "出席登録する"));
     // 認証コード画面ではテキスト入力中にも登録ボタンを選ぶ。
     // フォームがある場合は入力と登録ボタンが同じフォームに属することを確認する。
-    const input = target instanceof Element && target.closest('input');
     if (isCodeInput(input) && attendance.length === 1 &&
         (!input.form || (attendance[0].form || attendance[0].closest('form')) === input.form)) {
       event.preventDefault();
